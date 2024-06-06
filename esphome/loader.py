@@ -21,6 +21,7 @@ _LOGGER = logging.getLogger(__name__)
 class FileResource:
     package: str
     resource: str
+    c_lang_header: bool
 
     def path(self) -> ContextManager[Path]:
         return importlib.resources.as_file(
@@ -87,6 +88,10 @@ class ComponentManifest:
         return getattr(self.module, "CODEOWNERS", [])
 
     @property
+    def c_lang_headers(self) -> list[str]:
+        return getattr(self.module, "C_LANG_HEADERS", [])
+
+    @property
     def final_validate_schema(self) -> Optional[Callable[[ConfigType], None]]:
         """Components can declare a `FINAL_VALIDATE_SCHEMA` cv.Schema that gets called
         after the main validation. In that function checks across components can be made.
@@ -114,7 +119,9 @@ class ComponentManifest:
             if not importlib.resources.files(self.package).joinpath(resource).is_file():
                 # Not a resource = this is a directory (yeah this is confusing)
                 continue
-            ret.append(FileResource(self.package, resource))
+            ret.append(
+                FileResource(self.package, resource, resource in self.c_lang_headers)
+            )
         return ret
 
 

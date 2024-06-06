@@ -244,9 +244,14 @@ def copy_src_tree():
 
     # Build #include list for esphome.h
     include_l = []
-    for target, _ in source_files_l:
+    for target, src_file in source_files_l:
         if target.suffix in HEADER_FILE_EXTENSIONS:
-            include_l.append(f'#include "{target}"')
+            if not src_file.c_lang_header:
+                include_l.append(f'#include "{target}"')
+            else:
+                include_l.append('extern "C" {')
+                include_l.append(f'#include "{target}"')
+                include_l.append("}")
     include_l.append("")
     include_s = "\n".join(include_l)
 

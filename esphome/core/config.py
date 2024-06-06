@@ -381,7 +381,8 @@ async def to_code(config):
         else:
             cg.add_library(lib, None)
 
-    cg.add_build_flag("-Wno-unused-variable")
+    # Commented as with MatIEC C headers there is a lot of unused symbols for PLC component.
+    # cg.add_build_flag("-Wno-unused-variable")
     cg.add_build_flag("-Wno-unused-but-set-variable")
     cg.add_build_flag("-Wno-sign-compare")
 

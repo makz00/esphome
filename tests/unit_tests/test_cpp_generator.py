@@ -16,8 +16,14 @@ class TestExpressions:
             (cg.AssignmentExpression(None, None, "foo", "bar"), 'foo = "bar"'),
             (cg.AssignmentExpression(ct.float_, "*", "foo", 1), "float *foo = 1"),
             (cg.AssignmentExpression(ct.float_, "", "foo", 1), "float foo = 1"),
-            (cg.VariableDeclarationExpression(ct.int32, "*", "foo"), "int32_t *foo"),
-            (cg.VariableDeclarationExpression(ct.int32, "", "foo"), "int32_t foo"),
+            (
+                cg.VariableDeclarationExpression(ct.int32, "*", "foo", False),
+                "int32_t *foo",
+            ),
+            (
+                cg.VariableDeclarationExpression(ct.int32, "", "foo", False),
+                "int32_t foo",
+            ),
             (cg.ParameterExpression(ct.std_string, "foo"), "std::string foo"),
         ),
     )

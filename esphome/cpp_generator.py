@@ -76,14 +76,17 @@ class AssignmentExpression(Expression):
 
 
 class VariableDeclarationExpression(Expression):
-    __slots__ = ("type", "modifier", "name")
+    __slots__ = ("type", "modifier", "name", "extern")
 
-    def __init__(self, type_, modifier, name):
+    def __init__(self, type_, modifier, name, extern):
         self.type = type_
         self.modifier = modifier
         self.name = name
+        self.extern = extern
 
     def __str__(self):
+        if self.extern:
+            return f"extern {self.type} {self.modifier}{self.name}"
         return f"{self.type} {self.modifier}{self.name}"
 
 
@@ -532,7 +535,7 @@ def new_variable(id_: ID, rhs: SafeExpType, type_: "MockObj" = None) -> "MockObj
     obj = MockObj(id_, ".")
     if type_ is not None:
         id_.type = type_
-    decl = VariableDeclarationExpression(id_.type, "", id_)
+    decl = VariableDeclarationExpression(id_.type, "", id_, False)
     CORE.add_global(decl)
     assignment = AssignmentExpression(None, "", id_, rhs)
     CORE.add(assignment)
@@ -554,7 +557,7 @@ def Pvariable(id_: ID, rhs: SafeExpType, type_: "MockObj" = None) -> "MockObj":
     obj = MockObj(id_, "->")
     if type_ is not None:
         id_.type = type_
-    decl = VariableDeclarationExpression(id_.type, "*", id_)
+    decl = VariableDeclarationExpression(id_.type, "*", id_, False)
     CORE.add_global(decl)
     assignment = AssignmentExpression(None, None, id_, rhs)
     CORE.add(assignment)
@@ -577,6 +580,42 @@ def new_Pvariable(id_: ID, *args: SafeExpType) -> Pvariable:
         args = args[1:]
     rhs = id_.type.new(*args)
     return Pvariable(id_, rhs)
+
+
+def extern_variable(id_: ID, type_: "MockObj" = None) -> "MockObj":
+    """Declare a external variable in the code generation.
+
+    :param id_: The ID used to declare the variable (also specifies the type).
+    :param type_: Manually define a type for the variable, only use this when it's not possible
+      to do so during config validation phase (for example because of template arguments).
+
+    :return: The external variable as a MockObj.
+    """
+    obj = MockObj(id_, ".")
+    if type_ is not None:
+        id_.type = type_
+    decl = VariableDeclarationExpression(id_.type, "", id_, True)
+    CORE.add_global(decl)
+    CORE.register_variable(id_, obj)
+    return obj
+
+
+def extern_Pvariable(id_: ID, type_: "MockObj" = None) -> "MockObj":
+    """Declare a external pointer variable in the code generation.
+
+    :param id_: The ID used to declare the variable (also specifies the type).
+    :param type_: Manually define a type for the variable, only use this when it's not possible
+      to do so during config validation phase (for example because of template arguments).
+
+    :return: The external variable as a MockObj.
+    """
+    obj = MockObj(id_, "->")
+    if type_ is not None:
+        id_.type = type_
+    decl = VariableDeclarationExpression(id_.type, "*", id_, True)
+    CORE.add_global(decl)
+    CORE.register_variable(id_, obj)
+    return obj
 
 
 def add(expression: Union[Expression, Statement]):

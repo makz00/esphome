@@ -26,6 +26,8 @@ from esphome.cpp_generator import (  # noqa
     new_variable,
     Pvariable,
     new_Pvariable,
+    extern_variable,
+    extern_Pvariable,
     add,
     add_global,
     add_library,
