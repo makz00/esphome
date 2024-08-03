@@ -1,91 +1,153 @@
 import os
+import re
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
+from esphome.components import sensor, binary_sensor
 
 from esphome.const import (
     CONF_ID,
     CONF_PIN,
-    CONF_NUMBER,
-    CONF_MODE,
     CONF_INPUT,
     CONF_OUTPUT,
     CONF_ANALOG,
-    PLATFORM_ESP32,
-    PLATFORM_ESP8266,
-    PLATFORM_RP2040,
-    PLATFORM_BK72XX,
-    PLATFORM_RTL87XX,
+    CONF_MODE,
 )
 from esphome import pins
 from esphome.core import CORE, coroutine, EsphomeError
 
-from .plc_variables import get_plc_used_variables
-from .plc_pin_map import (
-    PinMap,
-    ESP8266_PIN_MAP,
-    ESP32_PIN_MAP,
-    RP2040_PIN_MAP,
-    BK72XX_PIN_MAP,
-    RTL87XX_PIN_MAP,
-)
 from esphome.helpers import copy_file_if_changed, walk_files
+from .enums import IOMode, LocationPrefix, SizePrefix
+from .plc_variables import get_located_variables
 
 
 CODEOWNERS = ["@makz00"]
+AUTO_LOAD = ["sensor", "binary_sensor"]
 C_LANG_HEADERS = ["openplc.h"]
 
-# Constant values section BEGIN
-
-CONF_PLC_VAR_NAME = "plc_variable_name"
-CONF_PLC_VAR_TO_PIN_MAP = "plc_variable_to_pin_map"
 CONF_MATIEC_INCLUDES_LOCATION = "matiec_includes_location"
 CONF_PLC_GENERATED_CODE_LOCATION = "plc_generated_code_location"
 
-PLATFORM_TO_PINS_MAP = {
-    PLATFORM_ESP8266: ESP8266_PIN_MAP,
-    PLATFORM_ESP32: ESP32_PIN_MAP,
-    PLATFORM_RP2040: RP2040_PIN_MAP,
-    PLATFORM_BK72XX: BK72XX_PIN_MAP,
-    PLATFORM_RTL87XX: RTL87XX_PIN_MAP,
-}
-
-# Constant values section END
-
+CONF_PHYSICAL_ADDRESSING = "physical_addressing"
+CONF_DIGITAL_IN = "digital_in"
+CONF_DIGITAL_OUT = "digital_out"
+CONF_ANALOG_IN = "analog_in"
+CONF_ANALOG_OUT = "analog_out"
+CONF_LOCATION = "location"
 
 PLC_NS = cg.esphome_ns.namespace("plc")
 PLC = PLC_NS.class_("PLC", cg.PollingComponent)
 IEC_BOOL = cg.esphome_ns.class_("IEC_BOOL")
+IEC_UINT = cg.esphome_ns.class_("IEC_UINT")
+
+DIGITAL_LOCATION_PATTERN = re.compile(r"(%)(I|Q|M)(X)([0-9]+)(\.)([0-9])")
+LOCATION_PATTERN = re.compile(r"(%)(I|Q|M)(B|W|D|L)([0-9]+)")
 
 
-def update_defaults_with_pins(defaults_list, spec_var_to_pin, input, analog):
-    for variable_name, pin_number in spec_var_to_pin.items():
-        defaults_list.append(
-            {
-                CONF_PLC_VAR_NAME: variable_name,
-                CONF_PIN: {
-                    CONF_NUMBER: pin_number,
-                    CONF_MODE: {
-                        CONF_INPUT: "true" if input else "false",
-                        CONF_OUTPUT: "false" if input else "true",
-                        CONF_ANALOG: "true" if analog else "false",
-                    },
-                },
-            }
+def validate_digital_location(
+    most_significant_addr_part: str, least_significant_addr_part: str
+) -> None:
+    if int(most_significant_addr_part) > 1023:
+        raise cv.Invalid(
+            "Most significant path of difital location must be no more than 1023."
+        )
+    if int(least_significant_addr_part) > 7:
+        raise cv.Invalid(
+            "Least significant path of difital location must be in range 0 to 7."
         )
 
 
-def get_all_defaults_with_pins(var_to_pin):
-    result = []
-    update_defaults_with_pins(result, var_to_pin[PinMap.DigitalIn], True, False)
-    update_defaults_with_pins(result, var_to_pin[PinMap.DigitalOut], False, False)
-    update_defaults_with_pins(result, var_to_pin[PinMap.AnalogIn], True, True)
-    update_defaults_with_pins(result, var_to_pin[PinMap.AnalogOut], False, False)
-    return result
+def validate_location(most_significant_addr_part: str) -> None:
+    if int(most_significant_addr_part) > 31:
+        # Maximum 32 (for no reason) addresses can be set for all platforms
+        raise cv.Invalid(
+            "Must be no more than the maximum memory location address for your platform."
+        )
 
 
-def get_default_var_to_pin_map():
-    return get_all_defaults_with_pins(PLATFORM_TO_PINS_MAP[CORE.target_platform])
+# Generate allowed ID according to C/C++ language. ID have to be same as MatIEC generated IDs, so
+# '%' is replaced with '__' and '.' is replaced with '_'
+def transform_location_to_allowed_id(value):
+    if match := DIGITAL_LOCATION_PATTERN.fullmatch(value):
+        most_significant_part = match[4]
+        least_significant_part = match[6]
+        validate_digital_location(most_significant_part, least_significant_part)
+        return re.sub(DIGITAL_LOCATION_PATTERN, r"__\2\3\4_\6", value)
+    if match := LOCATION_PATTERN.fullmatch(value):
+        most_significant_part = match[4]
+        validate_location(most_significant_part)
+        return re.sub(LOCATION_PATTERN, r"__\2\3\4", value)
+    raise cv.Invalid("Address pattern not found")
+
+
+def validate_address_prefixes(
+    value: str, location: LocationPrefix, size: SizePrefix
+) -> None:
+    for pattern in [DIGITAL_LOCATION_PATTERN, LOCATION_PATTERN]:
+        if match := pattern.fullmatch(value):
+            location_prefix = match[2]
+            size_prefix = match[3]
+            if location != LocationPrefix(location_prefix):
+                raise cv.Invalid(
+                    f"Location prefix must be '{location}',"
+                    " but it is '{location_prefix}' for address '{value}'"
+                )
+            if size != SizePrefix(size_prefix):
+                raise cv.Invalid(
+                    f"Size prefix must be '{size}',"
+                    " but it is '{size_prefix}' for address '{value}'"
+                )
+            return
+    raise cv.Invalid("Address pattern not found")
+
+
+def declare_address_id(type, expected_location, expected_size):
+    def validator(value):
+        validate_address_prefixes(value, expected_location, expected_size)
+        identifier = transform_location_to_allowed_id(value)
+        return cv.declare_id(type)(identifier)
+
+    return validator
+
+
+def valid_pin_mode(required_options):
+    def validator(value):
+        mode = value[CONF_MODE]
+        for conf_option, expected_value in required_options.items():
+            if (conf_option not in mode) or (mode[conf_option] != expected_value):
+                raise cv.Invalid(
+                    f"For this type of IO the option '{conf_option}' "
+                    f"must be set to '{expected_value}'"
+                )
+        return value
+
+    return validator
+
+
+def valid_plc_pin(io_mode):
+    required_options = {
+        IOMode.DIGITAL_IN: {CONF_INPUT: True},
+        IOMode.DIGITAL_OUT: {CONF_OUTPUT: True},
+        IOMode.ANALOG_IN: {CONF_INPUT: True, CONF_ANALOG: True},
+        IOMode.ANALOG_OUT: {CONF_OUTPUT: True},
+    }[io_mode]
+    return cv.All(
+        pins.gpio_pin_schema(required_options), valid_pin_mode(required_options)
+    )
+
+
+def get_located_variable_schema(io_mode):
+    arguments_list = {
+        IOMode.DIGITAL_IN: [IEC_BOOL, LocationPrefix.IN, SizePrefix.X],
+        IOMode.DIGITAL_OUT: [IEC_BOOL, LocationPrefix.Q, SizePrefix.X],
+        IOMode.ANALOG_IN: [IEC_UINT, LocationPrefix.IN, SizePrefix.W],
+        IOMode.ANALOG_OUT: [IEC_UINT, LocationPrefix.Q, SizePrefix.W],
+    }[io_mode]
+
+    return {
+        cv.Required(CONF_LOCATION): declare_address_id(*arguments_list),
+        cv.Required(CONF_PIN): valid_plc_pin(io_mode),
+    }
 
 
 CONFIG_SCHEMA = cv.Schema(
@@ -93,51 +155,30 @@ CONFIG_SCHEMA = cv.Schema(
         cv.GenerateID(): cv.declare_id(PLC),
         cv.Required(CONF_MATIEC_INCLUDES_LOCATION): cv.directory,
         cv.Required(CONF_PLC_GENERATED_CODE_LOCATION): cv.directory,
-        cv.Optional(
-            CONF_PLC_VAR_TO_PIN_MAP, default=get_default_var_to_pin_map()
-        ): cv.All(
-            cv.ensure_list(
-                {
-                    cv.Required(CONF_PLC_VAR_NAME): cv.declare_id(IEC_BOOL),
-                    cv.Required(CONF_PIN): pins.gpio_output_pin_schema,
-                }
+        cv.Optional(CONF_PHYSICAL_ADDRESSING): {
+            cv.Optional(CONF_DIGITAL_IN): cv.ensure_list(
+                binary_sensor.BINARY_SENSOR_SCHEMA.extend(
+                    get_located_variable_schema(IOMode.DIGITAL_IN)
+                )
             ),
-            cv.Length(min=0, max=32),
-        ),
+            cv.Optional(CONF_DIGITAL_OUT): cv.ensure_list(
+                binary_sensor.BINARY_SENSOR_SCHEMA.extend(
+                    get_located_variable_schema(IOMode.DIGITAL_OUT)
+                )
+            ),
+            cv.Optional(CONF_ANALOG_IN): cv.ensure_list(
+                sensor.SENSOR_SCHEMA.extend(
+                    get_located_variable_schema(IOMode.ANALOG_IN)
+                )
+            ),
+            cv.Optional(CONF_ANALOG_OUT): cv.ensure_list(
+                sensor.SENSOR_SCHEMA.extend(
+                    get_located_variable_schema(IOMode.ANALOG_OUT)
+                )
+            ),
+        },
     }
 ).extend(cv.COMPONENT_SCHEMA)
-
-
-def get_plc_var_to_pin_entry(plc_var, plc_var_to_pin_map):
-    for var_to_pin_entry in plc_var_to_pin_map:
-        # Cast to str() as here we have class ID
-        if str(var_to_pin_entry[CONF_PLC_VAR_NAME]) == plc_var:
-            return var_to_pin_entry
-
-
-def get_plc_variable_expression(plc_var_id):
-    return cg.extern_Pvariable(plc_var_id)
-
-
-def is_digital_input_variable(plc_var_name):
-    return (
-        str(plc_var_name)
-        in PLATFORM_TO_PINS_MAP[CORE.target_platform][PinMap.DigitalIn]
-    )
-
-
-def add_digital_pin_to_plc(var, pin, plc_var):
-    if is_digital_input_variable(plc_var):
-        cg.add(var.add_digital_input_pin(pin, plc_var))
-    else:
-        cg.add(var.add_digital_output_pin(pin, plc_var))
-
-
-def extract_configured_plc_vars(plc_var_to_pin_map):
-    return [
-        str(var_to_pin_entry[CONF_PLC_VAR_NAME])
-        for var_to_pin_entry in plc_var_to_pin_map
-    ]
 
 
 def copy_file(path, basename):
@@ -155,6 +196,22 @@ async def add_directory(dir_path):
             copy_file(p, basename)
 
 
+def get_located_variable_config(io_mode, plc_used_var_name, config):
+    if physical_addressing_config := config.get(CONF_PHYSICAL_ADDRESSING):
+        conf_mode = {
+            IOMode.DIGITAL_IN: CONF_DIGITAL_IN,
+            IOMode.DIGITAL_OUT: CONF_DIGITAL_OUT,
+            IOMode.ANALOG_IN: CONF_ANALOG_IN,
+            IOMode.ANALOG_OUT: CONF_ANALOG_OUT,
+        }[io_mode]
+        if physical_addressing_mode_config := physical_addressing_config.get(conf_mode):
+            for sensor_config in physical_addressing_mode_config:
+                # MatIEC generated variable must match with this PLC component mangled variable
+                if str(sensor_config[CONF_LOCATION]) == plc_used_var_name:
+                    return sensor_config
+    return None
+
+
 async def to_code(config):
     CORE.add_job(add_directory, config[CONF_MATIEC_INCLUDES_LOCATION])
     CORE.add_job(add_directory, config[CONF_PLC_GENERATED_CODE_LOCATION])
@@ -165,20 +222,28 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 
-    plc_var_to_pin_map = config[CONF_PLC_VAR_TO_PIN_MAP]
-    configured_plc_vars = extract_configured_plc_vars(plc_var_to_pin_map)
+    plc_methods_map = {
+        IOMode.DIGITAL_IN: var.add_digital_input,
+        IOMode.DIGITAL_OUT: var.add_digital_output,
+        IOMode.ANALOG_IN: var.add_analog_input,
+        IOMode.ANALOG_OUT: var.add_analog_output,
+    }
 
-    for plc_var_name in get_plc_used_variables(
-        config[CONF_PLC_GENERATED_CODE_LOCATION]
-    ):
-        if plc_var_name not in configured_plc_vars:
-            raise EsphomeError(
-                f"Pin has not been configured for PLC variable '{plc_var_name}'"
-            )
+    plc_code_dir = config[CONF_PLC_GENERATED_CODE_LOCATION]
 
-        var_to_pin_config = get_plc_var_to_pin_entry(plc_var_name, plc_var_to_pin_map)
+    for io_mode, located_var_name in get_located_variables(plc_code_dir):
+        located_var = get_located_variable_config(io_mode, located_var_name, config)
+        if located_var is None:
+            raise EsphomeError(f"Pin must be configured for: '{located_var_name}'")
 
-        pin = await cg.gpio_pin_expression(var_to_pin_config[CONF_PIN])
-        plc_var = get_plc_variable_expression(var_to_pin_config[CONF_PLC_VAR_NAME])
+        pin_config = located_var[CONF_PIN]
+        pin = await cg.gpio_pin_expression(pin_config)
 
-        add_digital_pin_to_plc(var, pin, plc_var)
+        if io_mode in [IOMode.DIGITAL_IN, IOMode.DIGITAL_OUT]:
+            sens = await binary_sensor.new_binary_sensor(located_var)
+        else:
+            sens = await sensor.new_sensor(located_var)
+
+        plc_var = cg.extern_Pvariable(located_var[CONF_LOCATION])
+
+        cg.add(plc_methods_map[io_mode](pin, sens, plc_var))
