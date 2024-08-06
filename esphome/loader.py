@@ -92,6 +92,29 @@ class ComponentManifest:
         return getattr(self.module, "C_LANG_HEADERS", [])
 
     @property
+    def generated_resources(self) -> list[FileResource]:
+        """Return a list of all file resources generated in the package of this component.
+        This kind of resources are different than standard resources that are present in
+        components folder. Generated resources are added when code generating, so are
+        present only in resultant firmware.
+
+        Note that generated resources are not intended to be included in esphome.h, so
+        will not be accessible from main.cpp of generated firmware. These resources will
+        be available only in component specific code after including.
+
+        This will return all elements that are placed in 'GENERATED_RESOURCES' component
+        global variable
+        """
+        ret = []
+
+        for resource in getattr(self.module, "GENERATED_RESOURCES", []):
+            ret.append(
+                FileResource(self.package, resource, resource in self.c_lang_headers)
+            )
+
+        return ret
+
+    @property
     def final_validate_schema(self) -> Optional[Callable[[ConfigType], None]]:
         """Components can declare a `FINAL_VALIDATE_SCHEMA` cv.Schema that gets called
         after the main validation. In that function checks across components can be made.
@@ -122,6 +145,7 @@ class ComponentManifest:
             ret.append(
                 FileResource(self.package, resource, resource in self.c_lang_headers)
             )
+
         return ret
 
 

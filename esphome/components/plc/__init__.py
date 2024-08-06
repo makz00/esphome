@@ -24,6 +24,7 @@ from .plc_variables import get_located_variables
 CODEOWNERS = ["@makz00"]
 AUTO_LOAD = ["sensor", "binary_sensor"]
 C_LANG_HEADERS = ["openplc.h"]
+GENERATED_RESOURCES = []
 
 CONF_MATIEC_INCLUDES_LOCATION = "matiec_includes_location"
 CONF_PLC_GENERATED_CODE_LOCATION = "plc_generated_code_location"
@@ -131,6 +132,7 @@ def valid_plc_pin(io_mode):
         IOMode.ANALOG_IN: {CONF_INPUT: True, CONF_ANALOG: True},
         IOMode.ANALOG_OUT: {CONF_OUTPUT: True},
     }[io_mode]
+
     return cv.All(
         pins.gpio_pin_schema(required_options), valid_pin_mode(required_options)
     )
@@ -181,19 +183,23 @@ CONFIG_SCHEMA = cv.Schema(
 ).extend(cv.COMPONENT_SCHEMA)
 
 
-def copy_file(path, basename):
-    parts = basename.split(os.path.sep)
-    dst = CORE.relative_src_path(*parts)
+def copy_file(path, resource_dir_name):
+    file_name = os.path.basename(path)
+    dst = CORE.relative_src_path(
+        "esphome", "components", "plc", resource_dir_name, file_name
+    )
     copy_file_if_changed(path, dst)
+    GENERATED_RESOURCES.append(f"{resource_dir_name}/{file_name}")
 
 
 @coroutine
-async def add_directory(dir_path):
-    path = CORE.relative_config_path(dir_path)
+async def add_directory(src_dir_path, resource_dir_name):
+    # DIR location is relative to YAML configuration. The goal is to pass absolute path. Then below line will be redundant
+    path = CORE.relative_config_path(src_dir_path)
+    # When it will not be dependent on YAML config, the check is not needed as user will not influence on the name
     if os.path.isdir(path):
-        for p in walk_files(path):
-            basename = os.path.relpath(p, os.path.dirname(path))
-            copy_file(p, basename)
+        for file in walk_files(path):
+            copy_file(file, resource_dir_name)
 
 
 def get_located_variable_config(io_mode, plc_used_var_name, config):
@@ -212,12 +218,18 @@ def get_located_variable_config(io_mode, plc_used_var_name, config):
     return None
 
 
-async def to_code(config):
-    CORE.add_job(add_directory, config[CONF_MATIEC_INCLUDES_LOCATION])
-    CORE.add_job(add_directory, config[CONF_PLC_GENERATED_CODE_LOCATION])
+RESOURCE_PLC_LIB = "plc_lib"
+RESOURCE_PLC_CODE = "plc_code"
 
-    cg.add_build_flag(f"-I src/{str(config[CONF_MATIEC_INCLUDES_LOCATION])}")
-    cg.add_build_flag(f"-I src/{str(config[CONF_PLC_GENERATED_CODE_LOCATION])}")
+
+async def to_code(config):
+    CORE.add_job(add_directory, config[CONF_MATIEC_INCLUDES_LOCATION], RESOURCE_PLC_LIB)
+    CORE.add_job(
+        add_directory, config[CONF_PLC_GENERATED_CODE_LOCATION], RESOURCE_PLC_CODE
+    )
+
+    cg.add_build_flag(f"-I src/esphome/components/plc/{RESOURCE_PLC_LIB}")
+    cg.add_build_flag(f"-I src/esphome/components/plc/{RESOURCE_PLC_CODE}")
 
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)

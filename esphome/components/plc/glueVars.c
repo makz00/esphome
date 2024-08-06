@@ -1,11 +1,11 @@
-#include "matiec_includes/iec_std_lib.h"
+#include "iec_std_lib.h"
 
 #define __LOCATED_VAR(type, name, ...) type __##name;
-#include "generated_plc_code/LOCATED_VARIABLES.h"
+#include "LOCATED_VARIABLES.h"
 #undef __LOCATED_VAR
 
 #define __LOCATED_VAR(type, name, ...) type *name = &__##name;
-#include "generated_plc_code/LOCATED_VARIABLES.h"
+#include "LOCATED_VARIABLES.h"
 #undef __LOCATED_VAR
 
 TIME __CURRENT_TIME;

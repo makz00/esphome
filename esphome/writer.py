@@ -232,11 +232,18 @@ the custom_components folder or the external_components feature.
 
 def copy_src_tree():
     source_files: list[loader.FileResource] = []
+    generated_source_files: list[loader.FileResource] = []
     for _, component in iter_components(CORE.config):
         source_files += component.resources
+        generated_source_files += component.generated_resources
+
     source_files_map = {
         Path(x.package.replace(".", "/") + "/" + x.resource): x for x in source_files
     }
+    generated_source_files_list = [
+        Path(x.package.replace(".", "/") + "/" + x.resource)
+        for x in generated_source_files
+    ]
 
     # Convert to list and sort
     source_files_l = list(source_files_map.items())
@@ -270,10 +277,13 @@ def copy_src_tree():
         if target in ignore_targets:
             # Ignore defines.h, will be dealt with later
             continue
-        if target not in source_files_copy:
+        if (
+            target not in source_files_copy
+            and target not in generated_source_files_list
+        ):
             # Source file removed, delete target
             p.unlink()
-        else:
+        elif target in source_files_copy:
             src_file = source_files_copy.pop(target)
             with src_file.path() as src_path:
                 copy_file_if_changed(src_path, p)

@@ -38,15 +38,8 @@ MATIEC_LOCATION_PATTERN = re.compile(
 )
 
 
-def get_os_specific_path_slash() -> str:
-    return "\\" if os.name == "nt" else "/"
-
-
 def get_located_variables(plc_generated_code_location: str) -> list[tuple[IOMode, str]]:
-    base_path = (
-        CORE.relative_config_path(plc_generated_code_location)
-        + get_os_specific_path_slash()
-    )
+    base_path = CORE.relative_config_path(plc_generated_code_location) + os.path.sep
     variables = []
 
     with open(base_path + "LOCATED_VARIABLES.h", encoding="utf-8") as located_vars_file:
